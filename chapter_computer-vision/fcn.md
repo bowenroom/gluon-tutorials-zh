@@ -15,9 +15,9 @@
 
 [VOC2012](http://host.robots.ox.ac.uk/pascal/VOC/voc2012/)是一个常用的语义分割数据集。输入图片跟之前的数据集类似，但标注也是保存称相应大小的图片来方便查看。下面代码下载这个数据集并解压。注意到压缩包大小是2GB，可以预先下好放置在`data_root`下。
 
-```{.python .input  n=40}
+```{.python .input  n=1}
 import os
-import tarfile 
+import tarfile
 from mxnet import gluon
 
 data_root = '../data'
@@ -35,7 +35,7 @@ if not os.path.isfile(voc_root+'/ImageSets/Segmentation/train.txt'):
 
 下面定义函数将训练图片和标注按序读进内存。
 
-```{.python .input  n=41}
+```{.python .input  n=2}
 from mxnet import image
 
 def read_images(root=voc_root, train=True):
@@ -55,7 +55,7 @@ def read_images(root=voc_root, train=True):
 
 我们画出前面三张图片和它们对应的标号。在标号中，白色代表边框黑色代表背景，其他不同的颜色对应不同物体。
 
-```{.python .input  n=42}
+```{.python .input  n=3}
 import sys
 sys.path.append('..')
 import utils
@@ -65,7 +65,7 @@ train_images, train_labels = read_images()
 imgs = []
 for i in range(3):
     imgs += [train_images[i], train_labels[i]]
-        
+
 utils.show_images(imgs, nrows=3, ncols=2, figsize=(12,8))
 [im.shape for im in imgs]
 ```
@@ -74,7 +74,7 @@ utils.show_images(imgs, nrows=3, ncols=2, figsize=(12,8))
 
 这里我们仅仅使用剪切来解决这个问题。就是说对于输入图片，我们随机剪切出一个固定大小的区域，然后对标号图片做同样位置的剪切。
 
-```{.python .input  n=43}
+```{.python .input  n=4}
 def rand_crop(data, label, height, width):
     data, rect = image.random_crop(data, (width, height))
     label = image.fixed_crop(label, *rect)
@@ -82,21 +82,21 @@ def rand_crop(data, label, height, width):
 
 imgs = []
 for _ in range(3):
-    imgs += rand_crop(train_images[0], train_labels[0], 
+    imgs += rand_crop(train_images[0], train_labels[0],
                       200, 300)
-    
+
 utils.show_images(imgs, nrows=3, ncols=2, figsize=(12,8))
 ```
 
 接下来我们列出每个物体和背景对应的RGB值
 
-```{.python .input  n=44}
+```{.python .input  n=5}
 classes = ['background','aeroplane','bicycle','bird','boat',
            'bottle','bus','car','cat','chair','cow','diningtable',
            'dog','horse','motorbike','person','potted plant',
            'sheep','sofa','train','tv/monitor']
 # RGB color for each class
-colormap = [[0,0,0],[128,0,0],[0,128,0], [128,128,0], [0,0,128], 
+colormap = [[0,0,0],[128,0,0],[0,128,0], [128,128,0], [0,0,128],
             [128,0,128],[0,128,128],[128,128,128],[64,0,0],[192,0,0],
             [64,128,0],[192,128,0],[64,0,128],[192,0,128],
             [64,128,128],[192,128,128],[0,64,0],[128,64,0],
@@ -107,14 +107,14 @@ len(classes), len(colormap)
 
 这样给定一个标号图片，我们就可以将每个像素对应的物体标号找出来。
 
-```{.python .input  n=45}
+```{.python .input  n=6}
 import numpy as np
 from mxnet import nd
 
 cm2lbl = np.zeros(256**3)
-for i,cm in enumerate(colormap):    
+for i,cm in enumerate(colormap):
     cm2lbl[(cm[0]*256+cm[1])*256+cm[2]] = i
-    
+
 def image2label(im):
     data = im.astype('int32').asnumpy()
     idx = (data[:,:,0]*256+data[:,:,1])*256+data[:,:,2]
@@ -123,46 +123,54 @@ def image2label(im):
 
 可以看到第一张训练图片的标号里面属于飞机的像素被标记成了1.
 
-```{.python .input  n=53}
+```{.python .input  n=7}
 y = image2label(train_labels[0])
 y[105:115, 130:140]
 ```
 
 现在我们可以定义数据读取了。每一次我们将图片和标注随机剪切到要求的形状，并将标注里每个像素转成对应的标号。简单起见我们将小于要求大小的图片全部过滤掉了。
 
-```{.python .input  n=54}
+```{.python .input  n=8}
 from mxnet import gluon
 from mxnet import nd
 
+
+rgb_mean = nd.array([0.485, 0.456, 0.406])
+rgb_std = nd.array([0.229, 0.224, 0.225])
+
+def normalize_image(data):
+    return (data.astype('float32') / 255 - rgb_mean) / rgb_std
+
 class VOCSegDataset(gluon.data.Dataset):
-    
+
     def _filter(self, images):
         return [im for im in images if (
             im.shape[0] >= self.crop_size[0] and
-            im.shape[1] >= self.crop_size[1])]  
-            
+            im.shape[1] >= self.crop_size[1])]
+
     def __init__(self, train, crop_size):
         self.crop_size = crop_size
         data, label = read_images(train=train)
-        self.data = self._filter(data)
+        data = self._filter(data)
+        self.data = [normalize_image(im) for im in data]
         self.label = self._filter(label)
         print('Read '+str(len(self.data))+' examples')
-        
+
     def __getitem__(self, idx):
         data, label = rand_crop(
             self.data[idx], self.label[idx],
             *self.crop_size)
-        data = data.transpose((2,0,1)).astype('float32')
+        data = data.transpose((2,0,1))
         label = image2label(label)
         return data, label
-        
+
     def __len__(self):
         return len(self.data)
 ```
 
 我们采用$320\times 480$的大小用来训练，注意到这个比前面我们使用的$224\times 224$要大上很多。但是同样我们将长宽都定义成了32的整数倍。
 
-```{.python .input  n=55}
+```{.python .input  n=9}
 # height x width
 input_shape = (320, 480)
 voc_train = VOCSegDataset(True, input_shape)
@@ -171,7 +179,7 @@ voc_test = VOCSegDataset(False, input_shape)
 
 最后定义批量读取。可以看到跟之前的不同是批量标号不再是一个向量，而是一个三维数组。
 
-```{.python .input  n=56}
+```{.python .input  n=10}
 batch_size = 64
 train_data = gluon.data.DataLoader(
     voc_train, batch_size, shuffle=True,last_batch='discard')
@@ -190,11 +198,11 @@ for data, label in train_data:
 
 全连接卷积网络（FCN）的提出是基于这样一个观察。假设$f$是一个卷积层，而且$y=f(x)$。那么在反传求导时，$\partial f(y)$会返回一个跟$x$一样形状的输出。卷积是一个对偶函数，就是$\partial^2 f = f$。那么如果我们想得到跟输入一样的输入，那么定义$g = \partial f$，这样$g(f(x))$就能达到我们想要的。
 
-具体来说，我们定义一个卷积转置层（transposed convolutional, 也经常被错误的叫做deconvolutions），它就是想卷积层的`forward`和`backward`函数兑换。
+具体来说，我们定义一个卷积转置层（transposed convolutional, 也经常被错误的叫做deconvolutions），它就是将卷积层的`forward`和`backward`函数兑换。
 
 下面例子里我们看到使用同样的参数，除了替换输入和输出通道数外，`Conv2DTranspose`可以将`nn.Conv2D`的输出还原其输入大小。
 
-```{.python .input  n=65}
+```{.python .input  n=11}
 from mxnet.gluon import nn
 
 conv = nn.Conv2D(10, kernel_size=4, padding=1, strides=2)
@@ -223,20 +231,20 @@ print('After transposed conv', conv_trans(y).shape)
 
 下面我们基于Resnet18来创建FCN。首先我们下载一个预先训练好的模型。
 
-```{.python .input  n=71}
+```{.python .input  n=12}
 from mxnet.gluon.model_zoo import vision as models
 pretrained_net = models.resnet18_v2(pretrained=True)
 
 (pretrained_net.features[-4:], pretrained_net.output)
 ```
 
-我们看到`feature`模块最后两层是`GlobalAvgPool2D`和`Flatten`，都是我们不需要的。所以我们定义一个新的网络，它复制除了`features`最后两层的权重。
+我们看到`feature`模块最后两层是`GlobalAvgPool2D`和`Flatten`，都是我们不需要的。所以我们定义一个新的网络，它复制除了最后两层的`features`模块的权重。
 
-```{.python .input  n=73}
+```{.python .input  n=13}
 net = nn.HybridSequential()
 for layer in pretrained_net.features[:-2]:
     net.add(layer)
-    
+
 x = nd.random.uniform(shape=(1,3,*input_shape))
 print('Input:', x.shape)
 print('Output:', net(x).shape)
@@ -244,21 +252,21 @@ print('Output:', net(x).shape)
 
 然后接上一个通道数等于类数的$1\times 1$卷积层。注意到`net`已经将输入长宽减少了32倍。那么我们需要接入一个`strides=32`的卷积转置层。我们使用一个比`stides`大两倍的`kernel`，然后补上适当的填充。
 
-```{.python .input  n=74}
+```{.python .input  n=14}
 num_classes = len(classes)
 
 with net.name_scope():
     net.add(
         nn.Conv2D(num_classes, kernel_size=1),
         nn.Conv2DTranspose(num_classes, kernel_size=64, padding=16,strides=32)
-    )    
+    )
 ```
 
 ## 训练
 
 训练的时候我们需要初始化新添加的两层。我们可以随机初始化，但实际中发现将卷积转置层初始化成双线性差值函数可以使得训练更容易。
 
-```{.python .input  n=75}
+```{.python .input  n=15}
 def bilinear_kernel(in_channels, out_channels, kernel_size):
     factor = (kernel_size + 1) // 2
     if kernel_size % 2 == 1:
@@ -278,25 +286,26 @@ def bilinear_kernel(in_channels, out_channels, kernel_size):
 
 下面代码演示这样的初始化等价于对图片进行双线性差值放大。
 
-```{.python .input  n=106}
+```{.python .input  n=16}
 from matplotlib import pyplot as plt
+
+x = train_images[0]
+print('Input', x.shape)
+x = x.astype('float32').transpose((2,0,1)).expand_dims(axis=0)/255
 
 conv_trans = nn.Conv2DTranspose(
     3, in_channels=3, kernel_size=8, padding=2, strides=4)
 conv_trans.initialize()
+conv_trans(x)
 conv_trans.weight.set_data(bilinear_kernel(3, 3, 8))
 
-x = voc_train[0][0]
-print('Input', x.shape)
-x = x.expand_dims(axis=0)/255
 
 y = conv_trans(x)
-y = y[0].clip(0,1)
+y = y[0].clip(0,1).transpose((1,2,0))
 print('Output', y.shape)
 
-plt.imshow(y.transpose((1,2,0)).asnumpy())
+plt.imshow(y.asnumpy())
 plt.show()
-
 ```
 
 所以网络的初始化包括了三部分。主体卷积网络从训练好的ResNet18复制得来，替代ResNet18最后全连接的卷积层使用随机初始化。
@@ -307,8 +316,8 @@ plt.show()
 from mxnet import init
 
 conv_trans = net[-1]
-conv_trans.initialize(init=init.Xavier())
-net[-2].initialize(init=init.Zero())
+conv_trans.initialize(init=init.Zero())
+net[-2].initialize(init=init.Xavier())
 
 x = nd.zeros((batch_size, 3, *input_shape))
 net(x)
@@ -325,7 +334,7 @@ import sys
 sys.path.append('..')
 import utils
 
-loss = gluon.loss.SoftmaxCrossEntropyLoss(axis=1)  
+loss = gluon.loss.SoftmaxCrossEntropyLoss(axis=1)
 
 ctx = utils.try_all_gpus()
 net.collect_params().reset_ctx(ctx)
@@ -343,8 +352,8 @@ utils.train(train_data, test_data, net, loss,
 
 ```{.python .input  n=27}
 def predict(im):
-    data = im.transpose((2,0,1)).astype('float32')
-    data = data.expand_dims(axis=0)
+    data = normalize_image(im)
+    data = data.transpose((2,0,1)).expand_dims(axis=0)
     yhat = net(data.as_in_context(ctx[0]))
     pred = nd.argmax(yhat, axis=1)
     return pred.reshape((pred.shape[1], pred.shape[2]))
@@ -366,7 +375,7 @@ for i in range(n):
     x = test_images[i]
     pred = label2image(predict(x))
     imgs += [x, pred, test_labels[i]]
-    
+
 utils.show_images(imgs, nrows=n, ncols=3, figsize=(6,10))
 ```
 
@@ -381,3 +390,5 @@ utils.show_images(imgs, nrows=n, ncols=3, figsize=(6,10))
 1. 试着改改训练参数来使得收敛更好些
 1. [FCN论文](https://arxiv.org/abs/1411.4038)中提到了不只是使用主体卷积网络输出，还可以将前面层的输出也加进来。试着实现。
 
+
+**吐槽和讨论欢迎点**[这里](https://discuss.gluon.ai/t/topic/3041)
